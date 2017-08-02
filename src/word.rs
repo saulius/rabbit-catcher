@@ -3,16 +3,18 @@ use std::ops::Sub;
 use std::str::Chars;
 use simd::i8x16;
 
-const ALPHABET_LENGTH: usize = 26 as usize;
-const ZERO_VEC: i8x16 = i8x16::splat(0);
+lazy_static! {
+    static ref ALPHABET_LENGTH: usize = 26;
+    pub static ref ZERO_VEC: i8x16 = i8x16::splat(0);
+}
 
-struct Histogram {
-    value: i8x16
+pub struct Histogram {
+    pub value: i8x16
 }
 
 impl Histogram {
     pub fn from_chars(chars: Chars) -> Self {
-        let mut value: [i8; ALPHABET_LENGTH] = [0; ALPHABET_LENGTH];
+        let mut value = vec![0; *ALPHABET_LENGTH];
 
         for chr in chars {
             value[(chr as i8 - 'a' as i8) as usize] += 1
@@ -63,31 +65,15 @@ impl Clone for Histogram {
 }
 
 pub struct Word {
-    pub value: String,
-    histo: Histogram,
+    pub value: Vec<u8>,
+    pub histo: Histogram,
 }
 
 impl Word {
     pub fn from_string(s: String) -> Self {
         Word {
-            value: s.clone(),
+            value: s.clone().into_bytes(),
             histo: Histogram::from_chars(s.chars()),
-        }
-    }
-
-    pub fn from_word_slice(words: &[&Word]) -> Self {
-        let value = words.iter()
-            .fold(String::new(), |acc, w| {
-                acc + &w.value
-            });
-
-        let histo = words.iter().fold(ZERO_VEC, |acc, w| {
-            acc + w.histo.value
-        });
-
-        Word {
-            value: value.clone(),
-            histo: Histogram { value: histo }
         }
     }
 
@@ -96,11 +82,7 @@ impl Word {
     }
 
     pub fn is_superset_of(&self, word: &Word) -> bool {
-        (self.histo.value - word.histo.value).ge(ZERO_VEC).all()
-    }
-
-    pub fn is_same(&self, word: &Word) -> bool {
-        (self.histo.value - word.histo.value).eq(ZERO_VEC).all()
+        (self.histo.value - word.histo.value).ge(*ZERO_VEC).all()
     }
 }
 
@@ -113,7 +95,7 @@ impl PartialEq for Word {
 impl fmt::Debug for Word {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // write!(f, "Word<{} {:?}>", self.value, self.histo)
-        write!(f, "Word<{}>", self.value)
+        write!(f, "Word<{:?}>", self.value)
     }
 }
 

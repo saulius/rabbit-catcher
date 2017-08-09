@@ -13,6 +13,7 @@ pub struct Histogram {
 }
 
 impl Histogram {
+    #[inline]
     pub fn from_chars(chars: Chars) -> Self {
         let mut value = vec![0; *ALPHABET_LENGTH];
 
@@ -47,6 +48,7 @@ impl Histogram {
 impl Sub for Histogram {
     type Output = Histogram;
 
+    #[inline]
     fn sub(self, other: Histogram) -> Histogram {
         Histogram { value: self.value - other.value }
     }
@@ -59,6 +61,7 @@ impl fmt::Debug for Histogram {
 }
 
 impl Clone for Histogram {
+    #[inline]
     fn clone(&self) -> Self {
         Histogram { value: self.value }
     }
@@ -70,6 +73,7 @@ pub struct Word {
 }
 
 impl Word {
+    #[inline]
     pub fn from_string(s: String) -> Self {
         Word {
             value: s.clone().into_bytes(),
@@ -77,16 +81,19 @@ impl Word {
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         self.value.len()
     }
 
+    #[inline]
     pub fn is_superset_of(&self, word: &Word) -> bool {
         (self.histo.value - word.histo.value).ge(*ZERO_VEC).all()
     }
 }
 
 impl PartialEq for Word {
+    #[inline]
     fn eq(&self, other: &Word) -> bool {
         self.value == other.value
     }
@@ -100,6 +107,7 @@ impl fmt::Debug for Word {
 }
 
 impl Clone for Word {
+    #[inline]
     fn clone(&self) -> Self {
         Word {
             value: self.value.clone(),

@@ -1,32 +1,42 @@
 #[macro_use] extern crate lazy_static;
-extern crate itertools;
 extern crate permutohedron;
 extern crate simd;
 extern crate crypto;
+extern crate smallvec;
 
 mod word;
 
+use std::env;
 use std::ascii::AsciiExt;
 use std::io::{self, BufReader};
 use std::io::prelude::*;
 use std::fs::File;
 use std::time::Instant;
+use std::iter::FromIterator;
 
 use crypto::md5::Md5;
 use crypto::digest::Digest;
-use itertools::Itertools;
-use permutohedron::Heap;
+use smallvec::SmallVec;
+use permutohedron::heap_recursive;
 
-use word::Word;
+use word::{Word, Histogram};
 
 lazy_static! {
     static ref WORDLIST_FILE: &'static str = "wordlist";
 
-    static ref TARGET_WORDS: [String; 3] = ["poultry".to_owned(),
-                                            "outwits".to_owned(),
-                                            "ants".to_owned()];
+    static ref TARGET_WORDS: [String; 3] = [
+        "poultry".to_owned(),
+        "outwits".to_owned(),
+        "ants".to_owned()
+    ];
 
     static ref TARGET_WORD: Word = Word::from_string(TARGET_WORDS.join(""));
+
+    static ref EXPECTED_HASHES: [String; 3] = [
+        "e4820b45d2277f3844eac66c903e84be".to_owned(),
+        "23170acc097c24edb98fc5488ab033fe".to_owned(),
+        "665e5bcb0c20062fe8abaaf4628bb154".to_owned()
+    ];
 }
 
 fn read_words(f: &'static str) -> Result<(Vec<Word>), io::Error> {
@@ -39,7 +49,7 @@ fn read_words(f: &'static str) -> Result<(Vec<Word>), io::Error> {
         .map(|word| word.unwrap())
         .filter(|word| word.chars().all(|c| c.is_alphabetic() && c.is_ascii()))
         .map(Word::from_string)
-        // words of a single letter are unlikely to appear
+    // words of a single letter are unlikely to appear
         .filter(|word| word.len() > 1 && TARGET_WORD.is_superset_of(word))
         .collect();
 
@@ -51,47 +61,103 @@ fn read_words(f: &'static str) -> Result<(Vec<Word>), io::Error> {
     Ok(valid_words)
 }
 
+fn scan(dictionary: &[Word],
+        indices: SmallVec<[usize; 8]>,
+        histo: Histogram,
+        start: Instant,
+        hasher: &mut Md5
+  ) {
+    let last_idx = indices.iter().last().unwrap();
+
+    for i in last_idx + 1..dictionary.len() {
+        let current_word = &dictionary[i];
+
+        let diff = histo - current_word.histo;
+
+        let is_subset = diff.value.ge(*word::ZERO_VEC).all();
+
+        if !is_subset {
+            continue;
+        }
+
+        let is_anagram = diff.value.eq(*word::ZERO_VEC).all();
+
+        let mut new_indices = indices.clone();
+        new_indices.push(i);
+
+        if is_anagram {
+            heap_recursive(&mut new_indices, |permutation| {
+                let bytes: Vec<u8> = permutation
+                    .iter()
+                    .map(|idx| dictionary[*idx].value.as_slice())
+                    .collect::<Vec<&[u8]>>()
+                    .join(&b' ');
+                hasher.input(&bytes);
+                let res = hasher.result_str();
+
+                if EXPECTED_HASHES.contains(&res) {
+                    let final_phrase: String = String::from_utf8(bytes).unwrap();
+                    let elapsed = start.elapsed();
+                    let elapsed_ms = (elapsed.as_secs() * 1_000) + (elapsed.subsec_nanos() / 1_000_000) as u64;
+
+                    println!("Found anagram: {:?} - {:?} (in {} ms)", final_phrase, res, elapsed_ms);
+                }
+
+                hasher.reset();
+            });
+        } else if is_subset {
+            scan(dictionary, new_indices, diff, start, hasher)
+        }
+    }
+}
+
 fn main() {
+    let mut parallelism = 1;
+
+    if let Some(par) = env::args().nth(1) {
+        parallelism = par.parse::<usize>().unwrap();
+    }
+
     let words = read_words(&WORDLIST_FILE).unwrap();
-
-    let mut expected = vec!["e4820b45d2277f3844eac66c903e84be",
-                            "23170acc097c24edb98fc5488ab033fe",
-                            "665e5bcb0c20062fe8abaaf4628bb154"];
-
-    let mut hasher = Md5::new();
 
     let start = Instant::now();
 
-    let combinations = words.iter()
-        .combinations(3)
-        .filter(|c| {
-            c.iter().fold(TARGET_WORD.histo.clone(), |combined_histo, word|
-                          combined_histo - word.histo.clone()
-            ).value.eq(*word::ZERO_VEC).all()
-        });
+    let hasher = Md5::new();
 
-    for combination in combinations {
-        let mut c = combination.clone();
-        let permutator = Heap::new(&mut c);
+    let num_tasks_per_thread = words.len() / parallelism;
 
-        for permutation in permutator {
-            let bytes: Vec<u8> = permutation.iter().map(|p| p.value.clone()).intersperse(" ".to_owned().into_bytes()).collect::<Vec<Vec<u8>>>().concat();
+    let mut threads = vec![];
 
-            hasher.input(&bytes);
-            let res = hasher.result_str();
+    // Divide wordlist into chunks depending on desired thread count
+    let wordlist = words
+        .chunks(num_tasks_per_thread)
+        .enumerate()
+        .map(|(thread_num, chunk)| {
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(i, word)| {
+                    let index_offset = thread_num + 1;
+                    let indices = SmallVec::<[usize; 8]>::from_iter(i * index_offset..(i+1) * index_offset);
+                    let current_histo = TARGET_WORD.histo - word.histo;
 
-            if expected.contains(&res.as_str()) {
-                let final_phrase: String = String::from_utf8(bytes).unwrap();
-                let elapsed = start.elapsed();
-                let elapsed_ms = (elapsed.as_secs() * 1_000) + (elapsed.subsec_nanos() / 1_000_000) as u64;
+                    (indices, current_histo)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
-                println!("Found anagram: {:?} - {:?} (in {} ms)", final_phrase, res, elapsed_ms);
+    for wl in wordlist {
+        let ws = words.clone();
 
-                // No longer need to check with the hash we just found
-                expected.retain(|&hash| hash != res);
+        threads.push(std::thread::spawn(move || {
+            for (indices, current_histo) in wl {
+                scan(&ws, indices, current_histo, start, &mut hasher.clone())
             }
+        }))
+    }
 
-            hasher.reset();
-        }
+    for thread in threads {
+        thread.join().unwrap()
     }
 }

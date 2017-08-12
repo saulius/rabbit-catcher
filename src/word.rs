@@ -8,6 +8,7 @@ lazy_static! {
     pub static ref ZERO_VEC: i8x16 = i8x16::splat(0);
 }
 
+#[derive(Copy)]
 pub struct Histogram {
     pub value: i8x16
 }
